@@ -1,6 +1,9 @@
 const fetch = require('node-fetch')
+const util = require('util');
+const exec = util.promisify(require('child_process').exec);
+const fs = require('fs/promises');
 
-exports.getWebAccessToken = async function getWebAccessToken (spDcCookie) {
+const getWebAccessToken = async function getWebAccessToken (spDcCookie) {
   const res = await fetch('https://open.spotify.com/get_access_token?reason=transport&productType=web_player', {
     headers: {
       Cookie: `sp_dc=${spDcCookie}`
@@ -8,9 +11,9 @@ exports.getWebAccessToken = async function getWebAccessToken (spDcCookie) {
   })
 
   return res.json()
-}
+};
 
-exports.getFriendActivity = async function getFriendActivity (webAccessToken) {
+const getFriendActivity = async function getFriendActivity (webAccessToken) {
   const res = await fetch('https://guc-spclient.spotify.com/presence-view/v1/buddylist', {
     headers: {
       Authorization: `Bearer ${webAccessToken}`
@@ -18,42 +21,48 @@ exports.getFriendActivity = async function getFriendActivity (webAccessToken) {
   })
 
   return res.json()
+};
+
+const getNewSong = async () => {
+  const { accessToken } = await getWebAccessToken("AQB5GD9siGDdMqcrEsmXtYwGmucIPu7g9n_Ed24rwnRu1cCFfZDArALpmgOGlkfhxxN8ZtLNZi0LIiV907xFQ5BOaC6JHXWX1wefILmILS4r")
+  const { friends } = await getFriendActivity(accessToken)
+  return friends[0].track;
 }
 
-exports.wrapWebApi = function wrapWebApi (api) {
-  const Request = require('spotify-web-api-node/src/base-request')
-  const HttpManager = require('spotify-web-api-node/src/http-manager')
+const playSong = async (uri, track) => {
+  let { stdout, stderr } = [null, null];
 
-  api.getWebAccessToken = function getWebAccessToken (callback) {
-    const { spDcCookie } = this.getCredentials()
-
-    return Request.builder()
-      .withHost('open.spotify.com')
-      .withPort(443)
-      .withScheme('https')
-      .withPath('/get_access_token')
-      .withQueryParameters({
-        reason: 'transport',
-        productType: 'web_player'
-      })
-      .withHeaders({
-        Accept: 'application/json',
-        Cookie: `sp_dc=${spDcCookie}`
-      })
-      .build()
-      .execute(HttpManager.get, callback)
-  }
-
-  api.getFriendActivity = function getFriendActivity (callback) {
-    return Request.builder()
-      .withHost('guc-spclient.spotify.com')
-      .withPort(443)
-      .withScheme('https')
-      .withAuth(this.getAccessToken())
-      .withPath('/presence-view/v1/buddylist')
-      .build()
-      .execute(HttpManager.get, callback)
-  }
-
-  return api
+  ({ stdout, stderr } = await exec(`playerctl -p spotify open "${uri}"`));
+  console.log('playing:', track);
+  
+  ({ stdout, stderr } = await exec(`playerctl -p spotify metadata`));
+  return (+stdout.match(/mpris:length\s+(\d+)/)[1]) / 1000
 }
+
+const pauseSong = async (uri, track) => {
+  let { stdout, stderr } = [null, null];
+  ({ stdout, stderr } = await exec(`playerctl -p spotify pause`));
+  console.log('paused');
+}
+
+const play = async (lastUri = null) => {
+  let { uri, name } = await getNewSong();
+  const songLength = await playSong(uri, name);
+
+  setTimeout(async () => {
+    if (lastUri === uri) {
+      await pauseSong();
+
+      do {
+         ({ uri, name } = await getNewSong());
+      } while (uri === lastUri);
+      
+      return play(uri);
+    }
+
+    return play(uri);
+  }, songLength)
+}
+
+(async () => play())();
+
